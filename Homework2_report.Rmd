@@ -6,7 +6,7 @@ output: html_document
 
 ## Name
 
-Please enter your name here.
+***Asim Waheed***
 
 ### Setup
 
@@ -14,9 +14,52 @@ Read in the data with `read_csv()` and store the data as an R object named `data
 
 
 ```{r}
-## Load the data and any necessary packages here.
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE, fig.width = 7, fig.height = 5)
+
+# Core
+library(tidyverse)
+library(readr)
+library(janitor)
+library(broom)
+
+opt_pkgs <- c("skimr","GGally","patchwork","DiagrammeR","MASS")
+invisible(lapply(opt_pkgs, function(p){ if (!requireNamespace(p, quietly = TRUE)) return(NULL); library(p, character.only = TRUE) }))
+
+# Load data into `dataset` (per template) and also keep `maacs` alias for convenience
+paths  <- c("maacs.csv","maacs.csv.gz","data/maacs.csv","data/maacs.csv.gz")
+path   <- paths[file.exists(paths)][1]
+if (is.na(path)) stop("Could not find maacs.csv(.gz). Put it in the project root or data/.")
+
+dataset <- suppressMessages(read_csv(path)) |> clean_names()
+maacs   <- dataset  # alias
+
+# Quick peek
+glimpse(dataset)
 
 ```
+
+```{r}
+# Missingness table
+miss_tbl <- dataset |>
+  summarise(across(everything(), ~ sum(is.na(.)), .names = "n_na_{.col}")) |>
+  tidyr::pivot_longer(everything(), names_to = "name", values_to = "value") |>
+  transmute(variable = sub("^n_na_", "", name), n_na = value) |>
+  arrange(desc(n_na))
+
+miss_tbl
+```
+
+```{r}
+# Basic distributions for key variables
+p1 <- ggplot(dataset, aes(fev1)) + geom_histogram(bins = 30) + labs(title="FEV1 (L)")
+p2 <- ggplot(dataset, aes(e_no)) + geom_histogram(bins = 30) + labs(title="eNO (ppb)")
+p3 <- ggplot(dataset, aes(cough_days)) + 
+  geom_histogram(binwidth = 1, boundary = -0.5) + 
+  scale_x_continuous(breaks = 0:14) + labs(title="Cough days (0–14)")
+p1; p2; p3
+```
+
+
 
 ## Part 1
 
@@ -31,7 +74,17 @@ NOTE: In order to write this function, you will need to translate the statement 
 NOTE: For this part, do not use any plots.
 
 ```{r}
-## Write your function here
+# Part 1 function (no plots):
+# Declare the statement "true" if: slope(age) > 0 and statistically significant at alpha = 0.05 in lm(fev1 ~ age)
+check_fev1_age <- function(dataset) {
+  dat <- dataset %>% drop_na(fev1, age)
+  fit <- lm(fev1 ~ age, data = dat)
+  tt  <- broom::tidy(fit)
+  age_row <- tt %>% filter(term == "age")
+  as.logical(age_row$estimate > 0 & age_row$p.value < 0.05)
+}
+
+check_fev1_age(dataset)
 
 ```
 
@@ -43,14 +96,59 @@ Fit a linear regression model with FEV1 as the outcome and age as a predictor.
 How much does FEV1 change for a 1-year increase in the child's age? 
 
 ```{r}
-## Add your code here
+fit_age <- lm(fev1 ~ age, data = dataset)
+summ_age <- broom::tidy(fit_age, conf.int = TRUE)
+beta_age <- summ_age %>% filter(term == "age")
+beta_age
 
+cat(
+  sprintf(
+    "A 1-year increase in age is associated with an estimated %.3f L change in FEV1 (95%% CI: %.3f to %.3f; p = %.4f).",
+    beta_age$estimate, beta_age$conf.low, beta_age$conf.high, beta_age$p.value
+  )
+)
+```
+
+
+```{r}
+# make sure packages and data exist in the session
+suppressPackageStartupMessages({
+  library(tidyverse)  # dplyr, tidyr, ggplot2, etc.
+  library(broom)
+})
+
+stopifnot(exists("dataset"))
+stopifnot(all(c("fev1","age") %in% names(dataset)))
+
+# try to use 'gender'; if not present, fall back to 'sex' or make a placeholder
+if (!"gender" %in% names(dataset)) {
+  if ("sex" %in% names(dataset)) {
+    dataset <- dataset %>% rename(gender = sex)
+  } else {
+    dataset <- dataset %>% mutate(gender = factor(NA))  # harmless placeholder
+  }
+}
+
+# Premise A (summary model): age effect remains positive after adjusting for gender
+fit_adj <- lm(fev1 ~ age + gender, data = dataset)
+premA   <- broom::tidy(fit_adj) %>% filter(term == "age")
+premA
+
+# Premise B (nonparametric association): Spearman correlation
+premB <- cor(dataset$fev1, dataset$age, method = "spearman", use = "complete.obs")
+premB
+
+# Premise C (plot): smoothed relationship
+ggplot(dataset, aes(age, fev1)) +
+  geom_point(alpha = .6) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(title = "FEV1 vs Age with LOESS smooth")
 ```
 
 
 Write your data analysis statement interpreting the regression model here:
 
-
+***A 1-year increase in age is associated with an estimated 0.171 L change in FEV1 (95% CI: 0.149 to 0.193; p = 0.0000).***
 
 ## Part 3
 
@@ -63,18 +161,34 @@ NOTE:
 * Do not use the code you write in Part 1 as a supporting premise
 
 ```{r}
-## Add your code here
+library(tidyverse); library(broom)
+
+stopifnot(exists("dataset"))
+if (!"gender" %in% names(dataset) && "sex" %in% names(dataset)) {
+  dataset <- dataset %>% rename(gender = sex)
+}
+
+fit_adj <- lm(fev1 ~ age + gender, data = dataset)
+premA   <- tidy(fit_adj) %>% dplyr::filter(term == "age")
+
+premB <- cor(dataset$fev1, dataset$age, use = "complete.obs", method = "spearman")
+
+ggplot(dataset, aes(age, fev1)) +
+  geom_point(alpha = .6) +
+  geom_smooth(method = "loess", se = FALSE) +
+  labs(title = "FEV1 vs Age with LOESS smooth")
+
 
 ```
 
 
 Write the three supporting premise statements here:
 
-1. 
+1. In a model adjusting for gender, the age coefficient on FEV1 is positive (see premA).
 
-2. 
+2. The Spearman correlation between age and FEV1 is positive (premB > 0).
 
-3. 
+3. A LOESS smooth of FEV1 on age shows an increasing trend in the observed data (plot above).
 
 
 ## Part 4
@@ -89,20 +203,56 @@ For statements involving plots, instead of returning `TRUE` or `FALSE`, you func
 
 
 ```{r}
-## Function for supporting premise statement 1
+
+## Function for supporting premise statement 1 (adjusted age effect > 0 and significant)
+premise1_fn <- function(dataset) {
+  fit <- lm(fev1 ~ age + gender, data = dataset %>% drop_na(fev1, age, gender))
+  tt  <- broom::tidy(fit) %>% filter(term == "age")
+  as.logical(tt$estimate > 0 & tt$p.value < 0.05)
+}
 
 ```
 
 
 ```{r}
-## Function for supporting premise statement 2
+## Function for supporting premise statement 2 (Spearman correlation > 0)
+premise2_fn <- function(dataset) {
+  dat <- dataset %>% drop_na(fev1, age)
+  rho <- cor(dat$fev1, dat$age, method = "spearman")
+  isTRUE(rho > 0)
+}
 
 ```
 
 
 ```{r}
-## Function for supporting premise statement 3
-
+## Function for supporting premise statement 3 (plot + hypothetical)
+premise3_fn <- function(dataset) {
+  # Observed plot
+  p_obs <- ggplot(dataset, aes(age, fev1)) +
+    geom_point(alpha = .6) +
+    geom_smooth(method = "loess", se = FALSE) +
+    labs(title = "Observed: FEV1 vs Age")
+  print(p_obs)
+  
+  # Hypothetical "true" plot (simulate clear positive slope)
+  set.seed(42)
+  n   <- nrow(dataset %>% drop_na(age, fev1))
+  age_sim <- seq(min(dataset$age, na.rm=TRUE), max(dataset$age, na.rm=TRUE), length.out = max(50, min(200, n)))
+  fev_sim <- 0.8 + 0.15 * (age_sim - mean(age_sim, na.rm=TRUE)) + rnorm(length(age_sim), 0, 0.2)
+  simdat  <- tibble(age = age_sim, fev1 = fev_sim)
+  p_true  <- ggplot(simdat, aes(age, fev1)) +
+    geom_point(alpha = .6) +
+    geom_smooth(method = "loess", se = FALSE) +
+    labs(title = "Hypothetical: Clear Positive Trend (if statement is true)")
+  print(p_true)
+  
+  invisible(NULL)
+}
+# Execute each function
+premise1_fn(dataset)
+premise2_fn(dataset)
+premise3_fn(dataset)
 ```
 
 Execute each of your function and show that the produce the expected output.
@@ -118,4 +268,46 @@ Create a fault tree for the alternative outcome describing how the alternative o
 
 Your fault tree should be created as a separate image and does not need to be created in R. Upload the image of the fault tree to Canvas.
 
+***Older children do not show higher FEV1 than younger children (null or inverse association), despite the biological expectation.***
+
+```{r}
+library(DiagrammeR)
+
+ft <- DiagrammeR::grViz("
+digraph ft {
+  graph [rankdir=TB, fontsize=10]
+  node [shape=box, style=rounded]
+  edge [arrowhead=none]
+
+  T [label='Top event: Expected positive age → FEV1 not observed']
+
+  M [label='Measurement issues']
+  S [label='Specification/model issues']
+  L [label='Selection/behavioral factors']
+  D [label='Data handling choices']
+  E [label='Effect modification']
+
+  T -> M; T -> S; T -> L; T -> D; T -> E
+
+  M1 [label='Spirometry calibration/technique errors']; M -> M1
+  M2 [label='Height/size not captured properly'];    M -> M2
+
+  S1 [label='Omitted confounder (height, meds)']; S -> S1
+  S2 [label='Nonlinearity or threshold'];         S -> S2
+
+  L1 [label='Older kids on controller meds lower FEV1 variability']; L -> L1
+
+  D1 [label='Transform/winsor choices']; D -> D1
+  D2 [label='Missing not at random'];    D -> D2
+
+  E1 [label='Effect differs by sex or allergy'];  E -> E1
+}
+")
+
+ft
+
+svg_txt <- DiagrammeRsvg::export_svg(ft)
+rsvg::rsvg_png(charToRaw(svg_txt), file = "fault_tree.png", width = 1200, height = 900)
+message("Saved fault_tree.png in the project directory.")
+```
 
